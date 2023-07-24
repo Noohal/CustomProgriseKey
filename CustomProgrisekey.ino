@@ -64,13 +64,6 @@ uint8_t sw[] = {LOW, LOW, LOW};
 uint8_t state = STATE_IDLE_A;
 uint8_t prev_state = STATE_IDLE_A;
 
-bool alternate_activation = false;
-uint8_t count = 0;
-
-unsigned long lastButtonTime = 0;
-unsigned long buttonDelay = 20;
-unsigned long minHoldTime = 1500;
-
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(9600);
@@ -103,10 +96,9 @@ void setup() {
   
   mp3.setTimeOut(500); //Set serial communictaion time out 500ms
   mp3.volume(25);  //Set volume value (0~30).
+  mp3.play(AUTHORIZE);
   //mp3.initialize();
   //mp3.playTrackNumber(ACTIVATION, 20);
-  alternate_activation = false;
-  lastButtonTime = millis();
 }
 
 void loop() {
@@ -136,8 +128,10 @@ void loop() {
       }
     } 
     else if(memcmp(sw, OFF_ON_OFF, BTNS) == 0) {
-      // Weapon Standby mode
-      Serial.println(F("     SW_1     "));
+      // Driver Mode (Amazing Caucasus, Zero-Two, Ark-One, Triceratops)
+      if(state == STATE_IDLE_B)
+        state = STATE_DRIVER_READY;
+
     } 
     else if(memcmp(sw, OFF_OFF_ON, BTNS) == 0) {
       // Forceriser Standby Mode
@@ -228,7 +222,10 @@ void loop() {
     } 
     else if(memcmp(sw, OFF_ON_ON, BTNS) == 0) {
       // Driver Activation -- Henshin or Finisher
-      ;
+      if(state == STATE_DRIVER_READY)
+        state = STATE_DRIVER_ACTIVE;
+      else if(state = STATE_DRIVER_FINISH_RDY)
+        state = STATE_DRIVER_ATTACK;
     } 
     else if(memcmp(sw, ON_ON_ON, BTNS) == 0) {
       // Blank
@@ -369,7 +366,8 @@ void loop() {
     }
     else if(memcmp(sw, OFF_ON_OFF, BTNS) == 0) {
       // Driver Standby State
-      ;
+      if(state == STATE_DRIVER_ACTIVE || state == STATE_DRIVER_ATTACK)
+        state = STATE_DRIVER_FINISH_RDY;
     }
     else if(memcmp(sw, OFF_OFF_ON, BTNS) == 0) {
       // Other Driver Standby State
@@ -520,6 +518,20 @@ void playSound() {
         Serial.print(prev_state); Serial.print(state);
         Serial.println(F(" | DYSTOPIA"));
         mp3.play(EXTRA_ATTACK);
+      }
+      break;
+    case STATE_DRIVER_ACTIVE:
+      if(prev_state == STATE_DRIVER_READY) {
+        Serial.print(prev_state); Serial.print(state);
+        Serial.println(F(" | PERFECTRISE"));
+        mp3.play(DRIVER_HENSHIN);
+      }
+      break;
+    case STATE_DRIVER_ATTACK:
+      if(prev_state == STATE_DRIVER_FINISH_RDY) {
+        Serial.print(prev_state); Serial.print(state);
+        Serial.println(F(" | DESTRUCTION"));
+        mp3.play(DRIVER_ATTACK);
       }
       break;
     default:
