@@ -5,6 +5,7 @@
 #define SW_0 2
 #define SW_1 3
 #define SW_2 4
+#define MAG 5
 #define TX 10
 #define RX 11
 
@@ -34,17 +35,19 @@
 
 #define STATE_AUTH_A            10 /* ON_OFF_OFF --> !alternate_activation */
 #define STATE_AUTH_B            11 /* ON_OFF_OFF -->  alternate_activation */
+#define STATE_AUTH_C            12
 
-#define STATE_DRIVER_READY      12 /* OFF_ON_OFF --> authorized */
-#define STATE_DRIVER_ACTIVE     13 /* OFF_ON_ON --> OFF_ON_OFF */
-#define STATE_DRIVER_FINISH_RDY 14 /* OFF_ON_OFF */
-#define STATE_DRIVER_ATTACK     15 /* OFF_ON_ON --> OFF_ON_OFF */
+#define STATE_DRIVER_READY      13 /* OFF_ON_OFF --> authorized */
+#define STATE_DRIVER_ACTIVE     14 /* OFF_ON_ON --> OFF_ON_OFF */
+#define STATE_DRIVER_FINISH_RDY 15 /* OFF_ON_OFF */
+#define STATE_DRIVER_ATTACK     16 /* OFF_ON_ON --> OFF_ON_OFF */
 
-#define STATE_SHOT_READY        16 /* OFF_OFF_ON --> authorized */
-#define STATE_SHOT_ACTIVE       17 /* OFF_ON_ON --> OFF_OFF_ON */
-#define STATE_SHOT_FINISH_RDY   18 /* OFF_OFF_ON --> ON_OFF_ON */
-#define STATE_SHOT_FINISH_WAT   19 /* OFF_OFF_ON
-#define STATE_SHOT_ATTACK       20 /* OFF_ON_ON --> OFF_OFF_ON */
+#define STATE_SHOT_READY        17 /* OFF_OFF_ON --> authorized */
+#define STATE_SHOT_ACTIVE       18 /* OFF_ON_ON --> OFF_OFF_ON */
+#define STATE_SHOT_FINISH_RDY   19 /* OFF_OFF_ON --> ON_OFF_ON */
+#define STATE_SHOT_FINISH_ACT   20 /* OFF_OFF_ON */
+#define STATE_SHOT_FINISH_WAT   21 /* OFF_ON_ON --> OFF_OFF_ON */
+#define STATE_SHOT_ATTACK       22
 
 SoftwareSerial ss(TX,RX);
 DFRobotDFPlayerMini mp3;
@@ -63,10 +66,18 @@ uint8_t prev_sw[] = {LOW, LOW, LOW};
 uint8_t sw[] = {LOW, LOW, LOW};
 uint8_t state = STATE_IDLE_A;
 uint8_t prev_state = STATE_IDLE_A;
+uint16_t prev_hall_sensor_state = HIGH;
+uint16_t hall_sensor_state = HIGH;
+
+bool can_authorize = false;
+unsigned long authorize_start_time = 0;
+const unsigned long MAX_AUTHORIZE_TIME = 35000;
+unsigned long last_time = 0;
 
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(9600);
+  pinMode(MAG, INPUT);
   pinMode(SW_0, INPUT);
   pinMode(SW_1, INPUT);
   pinMode(SW_2, INPUT);
@@ -104,40 +115,61 @@ void setup() {
 void loop() {
   // put your main code here, to run repeatedly:
   unsigned long now = millis();
-
+  //uint8_t value = digitalRead(MAG);
+  hall_sensor_state = digitalRead(MAG); 
   sw[0] = digitalRead(SW_0);
   sw[1] = digitalRead(SW_1);
   sw[2] = digitalRead(SW_2);
 
+  if(now - last_time >= 1000) {
+    //Serial.print(prev_state); Serial.print(" "); Serial.println(state);
+    Serial.print(sw[0]); Serial.print(sw[1]); Serial.println(sw[2]);
+    Serial.println(mp3.readState());
+    last_time = now;
+  }
   if(memcmp(prev_sw, OFF_OFF_OFF, BTNS) == 0) {
     if(memcmp(sw, OFF_OFF_OFF, BTNS) == 0) {
       // Reset
+      if((now - authorize_start_time) >= MAX_AUTHORIZE_TIME && (state == STATE_AUTH_A || state == STATE_AUTH_B || state == STATE_AUTH_C)) {
+        Reset();
+      }
+      if(state == STATE_IDLE_A && (prev_state != STATE_IDLE_A && prev_state != STATE_IDLE_B)) {
+        //prev_state = STATE_IDLE_A;
+        Serial.println(F("Mismatch IDLE"));
+      }
     }
     else if(memcmp(sw, ON_OFF_OFF, BTNS) == 0) {
       // Activate top button
-      Serial.print(F("SW_0          "));
       if(state == STATE_IDLE_A)
         state = STATE_IDLE_B;
       else if(state == STATE_IDLE_B)
         state = STATE_IDLE_A;
+      else if(state == STATE_AUTH_A)
+        state = STATE_AUTH_B;
+      else if(state == STATE_AUTH_B)
+        state = STATE_AUTH_C;
+      else if(state == STATE_AUTH_C)
+        state = STATE_AUTH_B;
       else {
         Serial.print(F("Unreachable STATE_IDLE -- "));
         Serial.print(prev_state); Serial.print(F(" | "));
         Serial.print(state);
         Serial.println();
       }
+      Authorize(true, now);
     } 
     else if(memcmp(sw, OFF_ON_OFF, BTNS) == 0) {
       // Driver Mode (Amazing Caucasus, Zero-Two, Ark-One, Triceratops)
-      if(state == STATE_IDLE_B)
+      if(state == STATE_IDLE_B || state == STATE_AUTH_A || state == STATE_AUTH_B || state == STATE_AUTH_C)
         state = STATE_DRIVER_READY;
-
     } 
     else if(memcmp(sw, OFF_OFF_ON, BTNS) == 0) {
       // Forceriser Standby Mode
       Serial.println(F("          SW_2"));
       if(state == STATE_IDLE_A)
         state = STATE_FORCE_READY;
+      else if(state == STATE_AUTH_A || state == STATE_AUTH_B || state == STATE_AUTH_C)
+        state = STATE_SHOT_READY;
     } 
     else if(memcmp(sw, ON_ON_OFF, BTNS) == 0) {
       // Blank
@@ -251,6 +283,8 @@ void loop() {
     } 
     else if(memcmp(sw, OFF_OFF_ON, BTNS) == 0) {
       // Holding down SW_2
+      if(state == STATE_SHOT_FINISH_ACT)
+        state = STATE_SHOT_FINISH_WAT;
     } 
     else if(memcmp(sw, ON_ON_OFF, BTNS) == 0) {
       // Blank
@@ -258,17 +292,24 @@ void loop() {
     } 
     else if(memcmp(sw, ON_OFF_ON, BTNS) == 0) {
       // Blank
-      ;
+      if(state == STATE_SHOT_FINISH_RDY)
+        state = STATE_SHOT_FINISH_ACT;
+      else
+        Serial.println(F("Unreachable OFF_OFF_ON -> ON_OFF_ON state"));
     } 
     else if(memcmp(sw, OFF_ON_ON, BTNS) == 0) {
       // Driver Activation -- Henshin or Finisher
-      if(state == STATE_WEAPON_ATTACK) { 
+      if(state == STATE_WEAPON_ATTACK)
         state = STATE_WEAPON_ACTIVE;
-      } else if(state == STATE_FORCE_READY)
+      else if(state == STATE_FORCE_READY)
         state = STATE_FORCE_ACTIVE;
-      else if(state == STATE_FORCE_FINISH_RDY) {
+      else if(state == STATE_FORCE_FINISH_RDY)
         state = STATE_FORCE_ATTACK;
-      } else 
+      else if(state == STATE_SHOT_READY)
+        state = STATE_SHOT_ACTIVE;
+      else if(state == STATE_SHOT_FINISH_WAT)
+        state = STATE_SHOT_ATTACK;
+      else 
         Serial.println(F("Unreachable OFF_OFF_ON -> OFF_ON_ON state"));
     } 
     else if(memcmp(sw, ON_ON_ON, BTNS) == 0) {
@@ -333,7 +374,8 @@ void loop() {
     }
     else if(memcmp(sw, OFF_OFF_ON, BTNS) == 0) {
       // Blank
-      ;
+      if(state == STATE_SHOT_FINISH_ACT)
+        state == STATE_SHOT_FINISH_WAT;
     }
     else if(memcmp(sw, OFF_ON_ON, BTNS) == 0) {
       // Driver Activation -- Henshin or Finisher
@@ -344,7 +386,6 @@ void loop() {
     }
     else if(memcmp(sw, ON_OFF_ON, BTNS) == 0) {
       // Blank
-      ;
     }
     else if(memcmp(sw, ON_ON_ON, BTNS) == 0) {
       // Blank
@@ -375,8 +416,12 @@ void loop() {
         state = STATE_WEAPON_ATTACK;
       else if(state == STATE_FORCE_ACTIVE || state == STATE_FORCE_ATTACK)
         state = STATE_FORCE_FINISH_RDY;
-      else 
+      else if(state == STATE_SHOT_ACTIVE || state == STATE_SHOT_ATTACK)
+        state = STATE_SHOT_FINISH_RDY;
+      else {
         Serial.println(F("Unreachable OFF_ON_ON -> OFF_OFF_ON state"));
+        Reset();
+      }
     }
     else if(memcmp(sw, OFF_ON_ON, BTNS) == 0) {
       // SW_1 and SW_2 held down
@@ -439,8 +484,9 @@ void loop() {
     Serial.println(F("Unreachable Previous Switch Condition"));
   }
 
-  playSound();
-
+  if(prev_hall_sensor_state == HIGH && hall_sensor_state == LOW && can_authorize) {
+    state = STATE_AUTH_A;
+  }
   /*if(prev_sw[0] == LOW && prev_sw[1] == LOW) {
     if(sw[0] == HIGH && sw[1] == LOW) {
       Serial.println("SW0");
@@ -457,24 +503,34 @@ void loop() {
     }
   }*/
 
-  if (mp3.available()) {
-    //printDetail(mp3.readType(), mp3.read()); //Print the detail message from DFPlayer to handle different errors and states.
-  }
+  PlaySound();
 
   prev_sw[0] = sw[0];
   prev_sw[1] = sw[1];
   prev_sw[2] = sw[2];
   prev_state = state;
+  prev_hall_sensor_state = hall_sensor_state;
 
   delay(20);
 }
 
-void Reset() {
-  state = STATE_IDLE_A;
-  Serial.println(F("RESET"));
+void Authorize(bool authorize, unsigned long time) {
+  if(!authorize) {
+    can_authorize = false;
+  } else {
+    can_authorize = true;
+    authorize_start_time = time;
+  }
 }
 
-void playSound() {
+void Reset() {
+  Serial.print(F("RESET | ")); Serial.print(prev_state); Serial.print(F(" ")); Serial.println(state);
+  Authorize(false, 0);
+  state = STATE_IDLE_A;
+  //prev_state = STATE_IDLE_B;
+}
+
+void PlaySound() {
   if(prev_state == state)
     return;
   switch(state) {
@@ -496,8 +552,6 @@ void playSound() {
       Serial.print(prev_state); Serial.print(state);
       Serial.println(F(" | PROGRISEKEY CONFIRMED"));
       mp3.play(ABILITY_1);
-      break;
-    case STATE_WEAPON_ACTIVE:
       break;
     case STATE_WEAPON_ATTACK:
       if(prev_state == STATE_WEAPON_ACTIVE || prev_state == STATE_WEAPON_RDY) {
@@ -534,13 +588,57 @@ void playSound() {
         mp3.play(DRIVER_ATTACK);
       }
       break;
+    case STATE_AUTH_A:
+      Serial.print(prev_state); Serial.print(state);
+      Serial.println(F(" | AUTHORIZE"));
+      mp3.play(AUTHORIZE);
+      break;
+    case STATE_AUTH_B:
+      if(prev_state == STATE_AUTH_A || prev_state == STATE_AUTH_C) {
+        Serial.print(prev_state); Serial.print(state);
+        Serial.println(F(" | B BREAKHORN"));
+        mp3.play(ACTIVATION);
+      }
+      break;
+    case STATE_AUTH_C:
+      if(prev_state == STATE_AUTH_B) {
+        Serial.print(prev_state); Serial.print(state);
+        Serial.println(F(" | C BREAKHORN"));
+        mp3.play(ACTIVATION);
+      }
+      break;
+    case STATE_SHOT_ACTIVE:
+      if(prev_state == STATE_SHOT_READY) {
+        Serial.print(prev_state); Serial.print(state);
+        Serial.println(F(" | SHOTRISE"));
+        mp3.play(SHOTRISE_HENSHIN);
+      }
+      break;
+    case STATE_SHOT_FINISH_ACT:
+      if(prev_state == STATE_SHOT_FINISH_RDY) {
+        Serial.print(prev_state); Serial.print(state);
+        Serial.println(F(" | SHOT BREAKHORN"));
+        mp3.play(ACTIVATION);
+        delay(3000);
+      }
+      break;
+    case STATE_SHOT_FINISH_WAT:
+      if(prev_state == STATE_SHOT_FINISH_ACT || prev_state == STATE_SHOT_FINISH_WAT) {
+        Serial.print(prev_state); Serial.print(state);
+        Serial.println(F(" | BLAST LOOP"));
+        mp3.loop(SHOTRISE_LOOP);
+      }
+      break;
+    case STATE_SHOT_ATTACK:
+      if(prev_state == STATE_SHOT_FINISH_WAT) {
+        Serial.print(prev_state); Serial.print(state);
+        Serial.println(F(" | AMAZING BLAST"));
+        mp3.play(SHOTRISE_ATTACK);
+      }
+      break;
     default:
       break;
   }
-}
-
-void stopMusic() {
-  
 }
 
 void printDetail(uint8_t type, int value){
