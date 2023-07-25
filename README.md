@@ -8,4 +8,5 @@ Switch_0_and_Sound and Progrisekey_Weapon_Functionality were saved prior to uplo
 # Hardware Used
 - Arduino Nano Every
 - DFRobot DFPlayerMini MP3 Module
+- KY-003 Hall Effect Sensor
 - Speaker and Limit Switches harvested from DX Assault Wolf Progrisekey
